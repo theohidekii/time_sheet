@@ -14,8 +14,8 @@ The system is optimized for the standard Brazilian 44-hour work week.
 - **Daily Target:** By default, Monday to Friday has a target of **08:48** (8.8 hours). This ensures that 5 days * 8h48m = 44 hours.
 - **Saturdays/Sundays:** By default, the expected working time is **00:00**. Any time worked on weekends counts entirely as positive balance.
 - **Bank of Hours (Saldo):** Instead of simple overtime, the system calculates a daily "Net Balance":
-  - *Positive:* Worked more than 08:48.
-  - *Negative:* Worked less than 08:48.
+  - *Positive:* Worked more than 09:00.
+  - *Negative:* Worked less than 09:00.
   - This allows for the "Compensated Saturday" model (working extra M-F to skip Saturday).
 
 ### 3. Attendance Management
