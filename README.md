@@ -61,10 +61,10 @@ Generates a comprehensive `.xlsx` report containing:
 
 ## ⚙️ Default Configuration
 
-- **Entry:** 08:00
-- **Exit:** 17:48
+- **Entry:** 07:30
+- **Exit:** 17:30
 - **Lunch:** 12:00 to 13:00
-- **Daily Target:** 08:48 (Monday-Friday)
+- **Daily Target:** 09:00 (Monday-Friday)
 - **Tolerance:** 10 minutes (for lateness)
 
 ## 📝 License
