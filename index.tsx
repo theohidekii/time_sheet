@@ -89,10 +89,15 @@ const App = () => {
     }
   };
 
+  const parseLocalDate = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  };
+
   const processData = () => {
     if (!startDate || !endDate || funcionarios.length === 0) { setIsProcessing(false); return; }
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const start = parseLocalDate(startDate);
+    const end = parseLocalDate(endDate);
     
     if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) { setIsProcessing(false); return; }
 
