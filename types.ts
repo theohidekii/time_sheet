@@ -40,7 +40,20 @@ export interface DiaTrabalho {
   saidasAntecipadas: number; // minutes
   observacoes: string[];
   pontosFaltantes?: PontoFaltante[];
-  atestado?: boolean; // New field for Medical Certificate
+  atestado?: boolean; // Dia abonado (atestado, férias, folga...) - saldo zerado
+  justificativa?: string; // Tipo da justificativa aplicada ao dia
+  feriado?: string; // Nome do feriado, se o dia for feriado
+}
+
+export interface AjusteDia {
+  hora: string;
+  manual: boolean;
+}
+
+export interface FeriadoCustom {
+  id: string;
+  data: string; // DD/MM/YYYY
+  descricao: string;
 }
 
 export interface ConfiguracaoSistema {
@@ -54,4 +67,14 @@ export interface ConfiguracaoSistema {
   tiposSaidaEspecial: string[];
   almocoDuracaoMinutos: number;
   exigirAlmoco: boolean; // New field to control lunch validation
+}
+
+export interface DataEspecial {
+  id: string;
+  data: string; // DD/MM/YYYY
+  descricao?: string;
+  entrada?: string; // HH:MM - vazio = usa o horário padrão
+  saida?: string; // HH:MM - vazio = usa o horário padrão
+  jornada?: string; // HH:MM - vazio = calculada a partir de entrada/saída
+  funcionarioId?: string; // vazio = vale para todos os funcionários
 }

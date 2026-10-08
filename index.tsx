@@ -1,12 +1,15 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import * as XLSX from 'xlsx';
+import './index.css';
 import { 
   Upload, FileSpreadsheet, Calendar, Clock, User, AlertCircle, Save, 
   Search, Settings, X, Check, FileText, Loader, LayoutDashboard, 
-  Menu, LogOut
+  Menu, LogOut, CalendarClock, Trash2, Plus, CalendarDays, RotateCcw
 } from 'lucide-react';
 import { AFDParserV2 } from './parser';
-import { Funcionario, MarcacaoPonto, DiaTrabalho, ConfiguracaoSistema } from './types';
+import { feriadosNacionais } from './feriados';
+import { Funcionario, MarcacaoPonto, DiaTrabalho, ConfiguracaoSistema, DataEspecial, AjusteDia, FeriadoCustom } from './types';
 
 // Extend window for XLSX
 declare global {
@@ -15,7 +18,116 @@ declare global {
   }
 }
 
+// --- Persistência (localStorage) ---
+const STORAGE_KEY = 'nexuspoint:v1';
+
+const DEFAULT_CONFIG: ConfiguracaoSistema = {
+  horarioPadraoEntrada: '07:30',
+  horarioPadraoSaida: '17:30',
+  horarioAlmocoInicio: '12:00',
+  horarioAlmocoFim: '13:00',
+  toleranciaAtraso: 10,
+  toleranciaSaida: 5,
+  jornadaDiaria: '08:48', // Padrão 44h semanais
+  tiposSaidaEspecial: [],
+  almocoDuracaoMinutos: 60,
+  exigirAlmoco: true
+};
+
+// Justificativas por dia. "Banco de Horas" não abona: o dia debita a jornada do saldo.
+const JUSTIFICATIVAS = ['Atestado Médico', 'Consulta Médica', 'Férias', 'Folga', 'Banco de Horas'];
+
+const loadSaved = (): any => {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') || {};
+  } catch {
+    return {};
+  }
+};
+
+// --- Helpers ---
+const isoToBR = (iso: string) => {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+};
+
+const toMin = (h: string) => {
+  const [hh, mm] = h.split(':').map(Number);
+  return hh * 60 + mm;
+};
+
+const fromMin = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
 // --- Components ---
+
+// Formulário + lista de datas especiais (globais ou de um funcionário)
+const SpecialDatesEditor = ({ items, onAdd, onRemove }: {
+  items: DataEspecial[];
+  onAdd: (d: Omit<DataEspecial, 'id' | 'funcionarioId'>) => void;
+  onRemove: (id: string) => void;
+}) => {
+  const [data, setData] = useState('');
+  const [descricao, setDescricao] = useState('');
+  const [entrada, setEntrada] = useState('');
+  const [saida, setSaida] = useState('');
+  const [jornada, setJornada] = useState('');
+
+  const canAdd = !!data && (!!entrada || !!saida || !!jornada);
+
+  const add = () => {
+    if (!canAdd) return;
+    onAdd({ data: isoToBR(data), descricao: descricao.trim() || undefined, entrada: entrada || undefined, saida: saida || undefined, jornada: jornada || undefined });
+    setData(''); setDescricao(''); setEntrada(''); setSaida(''); setJornada('');
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Data</label>
+          <input type="date" value={data} onChange={e => setData(e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descrição</label>
+          <input type="text" placeholder="Ex: Véspera de Natal" value={descricao} onChange={e => setDescricao(e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Entrada</label>
+          <input type="time" value={entrada} onChange={e => setEntrada(e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Saída</label>
+          <input type="time" value={saida} onChange={e => setSaida(e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+        </div>
+        <div className="col-span-2">
+          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Jornada (opcional)</label>
+          <input type="time" value={jornada} onChange={e => setJornada(e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+          <p className="text-[10px] text-slate-400 mt-1">* Em branco: calculada por Saída − Entrada − almoço. Campos vazios usam o horário padrão.</p>
+        </div>
+      </div>
+      <button onClick={add} disabled={!canAdd}
+        className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed">
+        <Plus size={16} /> Adicionar data especial
+      </button>
+
+      {items.length > 0 && (
+        <ul className="divide-y divide-slate-100 border border-slate-100 rounded-lg max-h-48 overflow-auto">
+          {items.map(it => (
+            <li key={it.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <div className="font-semibold text-slate-700">{it.data}{it.descricao ? ` · ${it.descricao}` : ''}</div>
+                <div className="text-[11px] text-slate-500">
+                  Ent: {it.entrada || 'padrão'} · Sai: {it.saida || 'padrão'}{it.jornada ? ` · Jornada: ${it.jornada}` : ''}
+                </div>
+              </div>
+              <button onClick={() => onRemove(it.id)} className="p-1.5 text-slate-300 hover:text-rose-600 shrink-0"><Trash2 size={16} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 const App = () => {
   // Navigation State
@@ -26,23 +138,20 @@ const App = () => {
   const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
   const [marcacoesRaw, setMarcacoesRaw] = useState<MarcacaoPonto[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [config, setConfig] = useState<ConfiguracaoSistema>({
-    horarioPadraoEntrada: '08:00',
-    horarioPadraoSaida: '17:48',
-    horarioAlmocoInicio: '12:00',
-    horarioAlmocoFim: '13:00',
-    toleranciaAtraso: 10,
-    toleranciaSaida: 5,
-    jornadaDiaria: '08:48', // Padrão 44h semanais
-    tiposSaidaEspecial: [],
-    almocoDuracaoMinutos: 60,
-    exigirAlmoco: true
-  });
-  const [employeeConfigs, setEmployeeConfigs] = useState<{[key: string]: ConfiguracaoSistema}>({});
-  const [abonos, setAbonos] = useState<{[key: string]: boolean}>({});
+  const [saved] = useState(loadSaved);
+  const [config, setConfig] = useState<ConfiguracaoSistema>({ ...DEFAULT_CONFIG, ...saved.config });
+  const [employeeConfigs, setEmployeeConfigs] = useState<{[key: string]: ConfiguracaoSistema}>(saved.employeeConfigs || {});
+  const [justificativas, setJustificativas] = useState<{[dayId: string]: string}>(saved.justificativas || {});
+  // Horários editados à mão, por dia. Ficam separados das batidas do relógio para sobreviver a qualquer recálculo.
+  const [ajustes, setAjustes] = useState<{[dayId: string]: AjusteDia[]}>(saved.ajustes || {});
+  const [feriadosCustom, setFeriadosCustom] = useState<FeriadoCustom[]>(saved.feriadosCustom || []);
+  const [feriadosDesativados, setFeriadosDesativados] = useState<string[]>(saved.feriadosDesativados || []);
   const [showConfigModal, setShowConfigModal] = useState(false);
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [showSpecialModal, setShowSpecialModal] = useState(false);
+  const [showFeriadosModal, setShowFeriadosModal] = useState(false);
+  const [specialDates, setSpecialDates] = useState<DataEspecial[]>(saved.specialDates || []);
+  const [startDate, setStartDate] = useState<string>(saved.startDate || '');
+  const [endDate, setEndDate] = useState<string>(saved.endDate || '');
   const [selectedFuncionarioId, setSelectedFuncionarioId] = useState<string | null>(null);
   const [processedDays, setProcessedDays] = useState<Map<string, DiaTrabalho[]>>(new Map());
   const [searchTerm, setSearchTerm] = useState('');
@@ -52,6 +161,27 @@ const App = () => {
 
   // Effects
   useEffect(() => { parser.updateConfig(config); }, [config, parser]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        config, employeeConfigs, justificativas, ajustes, specialDates,
+        feriadosCustom, feriadosDesativados, startDate, endDate
+      }));
+    } catch { /* storage cheio ou bloqueado: segue sem salvar */ }
+  }, [config, employeeConfigs, justificativas, ajustes, specialDates, feriadosCustom, feriadosDesativados, startDate, endDate]);
+
+  // Feriados do período: nacionais (menos os desativados) + os cadastrados à mão
+  const feriadoMap = useMemo(() => {
+    const anoIni = startDate ? Number(startDate.slice(0, 4)) : new Date().getFullYear();
+    const anoFim = endDate ? Number(endDate.slice(0, 4)) : anoIni;
+    const map = new Map<string, string>();
+    for (let a = anoIni; a <= Math.max(anoIni, anoFim); a++) {
+      feriadosNacionais(a).forEach(f => { if (!feriadosDesativados.includes(f.data)) map.set(f.data, f.descricao); });
+    }
+    feriadosCustom.forEach(f => map.set(f.data, f.descricao));
+    return map;
+  }, [startDate, endDate, feriadosCustom, feriadosDesativados]);
 
   useEffect(() => {
     // Config específica para Maria das Neves
@@ -94,6 +224,29 @@ const App = () => {
     return new Date(y, m - 1, d);
   };
 
+  // Config efetiva de um dia: base (funcionário ou global) + data especial (individual tem prioridade sobre global)
+  const getDayConfig = (funcId: string, dateStr: string): ConfiguracaoSistema => {
+    const base = employeeConfigs[funcId] || config;
+    const matches = specialDates.filter(s => s.data === dateStr && (!s.funcionarioId || s.funcionarioId === funcId));
+    const sp = matches.find(s => s.funcionarioId === funcId) || matches[0];
+    if (!sp) return base;
+    const entrada = sp.entrada || base.horarioPadraoEntrada;
+    const saida = sp.saida || base.horarioPadraoSaida;
+    let jornada = base.jornadaDiaria;
+    if (sp.jornada) {
+      jornada = sp.jornada;
+    } else if (sp.entrada || sp.saida) {
+      const almoco = base.exigirAlmoco ? base.almocoDuracaoMinutos : 0;
+      jornada = fromMin(Math.max(0, toMin(saida) - toMin(entrada) - almoco));
+    }
+    return { ...base, horarioPadraoEntrada: entrada, horarioPadraoSaida: saida, jornadaDiaria: jornada };
+  };
+
+  const addSpecialDate = (d: Omit<DataEspecial, 'id' | 'funcionarioId'>, funcionarioId?: string) => {
+    setSpecialDates(prev => [...prev, { ...d, id: `sp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, funcionarioId }]);
+  };
+  const removeSpecialDate = (id: string) => setSpecialDates(prev => prev.filter(s => s.id !== id));
+
   const processData = () => {
     if (!startDate || !endDate || funcionarios.length === 0) { setIsProcessing(false); return; }
     const start = parseLocalDate(startDate);
@@ -117,12 +270,17 @@ const App = () => {
 
     funcionarios.forEach(func => {
       const days: DiaTrabalho[] = [];
-      const funcConfig = employeeConfigs[func.id] || config;
-
       dateArray.forEach(dateStr => {
         const funcPISList = [func.pis, ...(func.pisAdicionais || [])];
-        const punches = marcacoesRaw.filter(m => funcPISList.includes(m.pis) && m.data === dateStr);
         const dayId = `${func.id}-${dateStr}`;
+        const ajuste = ajustes[dayId];
+        const punches: MarcacaoPonto[] = ajuste
+          ? ajuste.map((a, i) => ({
+              id: `manual-${dayId}-${i}`, nsr: a.manual ? 'MANUAL' : '', funcionarioId: func.id, funcionarioNome: func.nome,
+              pis: func.pis, nomeFuncionario: func.nome, data: dateStr, hora: a.hora, tipo: a.manual ? 'manual' : 'outro', crc: '', manual: a.manual
+            }))
+          : marcacoesRaw.filter(m => funcPISList.includes(m.pis) && m.data === dateStr);
+        const justificativa = justificativas[dayId];
         const dia: DiaTrabalho = {
           id: dayId,
           data: dateStr,
@@ -136,13 +294,15 @@ const App = () => {
           saldoDia: 0,
           saidasAntecipadas: 0,
           observacoes: [],
-          atestado: abonos[dayId] || false
+          justificativa,
+          atestado: !!justificativa && justificativa !== 'Banco de Horas',
+          feriado: feriadoMap.get(dateStr)
         };
         const [dd, mm, yyyy] = dateStr.split('/').map(Number);
         const dateObj = new Date(yyyy, mm-1, dd);
         const weekDays = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
         dia.diaSemana = weekDays[dateObj.getDay()];
-        parser.calcularHorariosDia(dia, funcConfig);
+        parser.calcularHorariosDia(dia, getDayConfig(func.id, dateStr));
         days.push(dia);
       });
       newProcessedDays.set(func.id, days);
@@ -158,7 +318,7 @@ const App = () => {
         else setIsProcessing(false);
     }, 600);
     return () => clearTimeout(timer);
-  }, [fileContent, startDate, endDate, config, employeeConfigs, abonos]);
+  }, [fileContent, startDate, endDate, config, employeeConfigs, justificativas, ajustes, specialDates, feriadoMap]);
 
   const handleTimeEdit = (dayId: string, punchIndex: number, newTime: string) => {
     if (!selectedFuncionarioId) return;
@@ -194,8 +354,8 @@ const App = () => {
         }
     }
     day.marcacoes = marcacoes;
-    const funcConfig = employeeConfigs[selectedFuncionarioId] || config;
-    parser.calcularHorariosDia(day, funcConfig);
+    parser.calcularHorariosDia(day, getDayConfig(selectedFuncionarioId, day.data));
+    setAjustes(prev => ({ ...prev, [dayId]: day.marcacoes.map(m => ({ hora: m.hora, manual: !!m.manual })) }));
     newDays[dayIndex] = day;
     const newMap = new Map(processedDays);
     newMap.set(selectedFuncionarioId, newDays);
@@ -261,7 +421,7 @@ const App = () => {
           const row: any[] = [day.data, day.diaSemana];
           for(let i=0; i<6; i++) row.push(day.marcacoes[i]?.hora || "--");
           if (day.atestado) {
-            row.push("ATESTADO", "00:00", "Atestado Médico Entregue");
+            row.push((day.justificativa || 'Atestado Médico').toUpperCase(), "00:00", `${day.justificativa || 'Atestado Médico'} (dia abonado)`);
           } else {
             row.push(
                 minutesToHM(day.totalHorasTrabalhadas), 
@@ -316,8 +476,8 @@ const App = () => {
                <Clock className="w-5 h-5 text-white" />
              </div>
              <div>
-               <h1 className="font-bold text-lg tracking-tight">NexusPoint</h1>
-               <p className="text-xs text-indigo-300">Gestão Inteligente</p>
+               <h1 className="font-bold text-lg tracking-tight">Folha de Ponto</h1>
+               <p className="text-xs text-indigo-300">Leitor de Ponto</p>
              </div>
           </div>
           
@@ -348,7 +508,7 @@ const App = () => {
         {/* Mobile Header */}
         <div className="md:hidden bg-white border-b border-gray-200 p-4 flex items-center justify-between">
            <div className="flex items-center gap-2 font-bold text-indigo-900">
-             <Clock size={20} className="text-indigo-600" /> NexusPoint
+             <Clock size={20} className="text-indigo-600" /> Folha de Ponto
            </div>
            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="text-gray-500">
              {mobileMenuOpen ? <X /> : <Menu />}
@@ -364,6 +524,19 @@ const App = () => {
               <p className="text-sm text-slate-500">Visão geral da folha de ponto</p>
             </div>
             <div className="flex gap-3">
+              <button onClick={() => setShowSpecialModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-white text-slate-700 rounded-lg hover:bg-slate-50 transition border border-slate-200 text-sm font-medium shadow-sm">
+                <CalendarClock size={16} />
+                <span>Data Especial</span>
+                {specialDates.filter(s => !s.funcionarioId).length > 0 && (
+                  <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 rounded-full px-1.5">{specialDates.filter(s => !s.funcionarioId).length}</span>
+                )}
+              </button>
+              <button onClick={() => setShowFeriadosModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-white text-slate-700 rounded-lg hover:bg-slate-50 transition border border-slate-200 text-sm font-medium shadow-sm">
+                <CalendarDays size={16} />
+                <span>Feriados</span>
+              </button>
               <label className="flex items-center gap-2 px-4 py-2 bg-white text-slate-700 rounded-lg cursor-pointer hover:bg-slate-50 transition border border-slate-200 text-sm font-medium shadow-sm">
                 <Upload size={16} />
                 <span>Importar AFD</span>
@@ -494,7 +667,7 @@ const App = () => {
                                 <th className="p-4 text-center border-b border-slate-200">S2</th>
                                 <th className="p-4 text-center border-b border-slate-200 w-24">Trab.</th>
                                 <th className="p-4 text-center border-b border-slate-200 w-24">Saldo</th>
-                                <th className="p-4 text-center border-b border-slate-200 w-16"></th>
+                                <th className="p-4 text-center border-b border-slate-200 w-36">Justificativa</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -511,7 +684,13 @@ const App = () => {
                                             ! {day.pontosFaltantes![0].tipo}
                                           </div>
                                         )}
-                                        {isAtestado && <div className="mt-1 inline-block text-[9px] font-bold text-green-600 bg-green-50 px-1.5 rounded border border-green-100">ATESTADO</div>}
+                                        {isAtestado && <div className="mt-1 inline-block text-[9px] font-bold text-green-600 bg-green-50 px-1.5 rounded border border-green-100 uppercase">{day.justificativa}</div>}
+                                        {day.justificativa === 'Banco de Horas' && <div className="mt-1 inline-block text-[9px] font-bold text-sky-600 bg-sky-50 px-1.5 rounded border border-sky-100 uppercase">Banco de Horas</div>}
+                                        {day.feriado && <div className="mt-1 block max-w-[110px] truncate text-[9px] font-bold text-violet-600 bg-violet-50 px-1.5 rounded border border-violet-100" title={day.feriado}>FERIADO · {day.feriado}</div>}
+                                        {ajustes[day.id] && (
+                                          <button title="Voltar aos horários originais do relógio" onClick={() => setAjustes(prev => { const n = { ...prev }; delete n[day.id]; return n; })}
+                                            className="mt-1 flex items-center gap-1 text-[9px] font-bold text-amber-600 hover:text-amber-800"><RotateCcw size={10} /> restaurar</button>
+                                        )}
                                       </td>
                                       {[0,1,2,3].map(idx => (
                                         <td key={idx} className="p-2 text-center">
@@ -530,10 +709,15 @@ const App = () => {
                                         {!isAtestado ? minutesToHM(day.saldoDia) : '-'}
                                       </td>
                                       <td className="p-4 text-center">
-                                        <button onClick={() => setAbonos(prev => ({...prev, [day.id]: !prev[day.id]}))} 
-                                          className={`p-1.5 rounded hover:bg-slate-200 transition ${isAtestado ? 'text-green-600 bg-green-100 hover:bg-green-200' : 'text-slate-300'}`}>
-                                          <FileText size={16} />
-                                        </button>
+                                        <select value={justificativas[day.id] || ''} title="Justificativa do dia"
+                                          onChange={e => {
+                                            const v = e.target.value;
+                                            setJustificativas(prev => { const n = { ...prev }; if (v) n[day.id] = v; else delete n[day.id]; return n; });
+                                          }}
+                                          className={`w-32 p-1.5 rounded border text-xs outline-none ${justificativas[day.id] ? 'border-green-200 bg-green-50 text-green-700 font-semibold' : 'border-slate-200 bg-white text-slate-400'}`}>
+                                          <option value="">Justificar…</option>
+                                          {JUSTIFICATIVAS.map(j => <option key={j} value={j}>{j}</option>)}
+                                        </select>
                                       </td>
                                   </tr>
                                 )
@@ -560,12 +744,12 @@ const App = () => {
       {/* Modal Config - Same logic, new style */}
       {showConfigModal && selectedFuncionarioId && (
          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-slate-50">
                   <h3 className="font-bold text-slate-800">Ajuste Individual</h3>
                   <button onClick={() => setShowConfigModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
                </div>
-               <div className="p-6 space-y-4">
+               <div className="p-6 space-y-4 overflow-auto">
                   <p className="text-sm text-indigo-600 bg-indigo-50 p-3 rounded-lg border border-indigo-100 font-medium">
                      {processedDays.get(selectedFuncionarioId)?.[0]?.funcionarioNome}
                   </p>
@@ -587,6 +771,13 @@ const App = () => {
                      <input id="modal-almoco" type="checkbox" defaultChecked={currentEmployeeConfig.exigirAlmoco} className="rounded text-indigo-600" />
                      <span className="text-sm text-slate-700">Validar Almoço</span>
                   </label>
+                  <div className="border-t border-slate-100 pt-4">
+                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-2"><CalendarClock size={14} /> Data Especial (só este funcionário)</h4>
+                     <SpecialDatesEditor
+                        items={specialDates.filter(s => s.funcionarioId === selectedFuncionarioId)}
+                        onAdd={d => addSpecialDate(d, selectedFuncionarioId)}
+                        onRemove={removeSpecialDate} />
+                  </div>
                </div>
                <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
                   <button onClick={() => setShowConfigModal(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">Cancelar</button>
@@ -603,9 +794,95 @@ const App = () => {
          </div>
       )}
 
+      {/* Modal Feriados */}
+      {showFeriadosModal && (
+         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+               <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-slate-50">
+                  <h3 className="font-bold text-slate-800">Feriados do período</h3>
+                  <button onClick={() => setShowFeriadosModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+               </div>
+               <div className="p-6 overflow-auto space-y-4">
+                  <p className="text-xs text-slate-500">Em feriado nada é cobrado do funcionário; o que for trabalhado vira saldo positivo. Desmarque um feriado nacional para tratá-lo como dia normal.</p>
+                  <ul className="divide-y divide-slate-100 border border-slate-100 rounded-lg max-h-64 overflow-auto">
+                     {(() => {
+                        const anoIni = startDate ? Number(startDate.slice(0, 4)) : new Date().getFullYear();
+                        const anoFim = Math.max(anoIni, endDate ? Number(endDate.slice(0, 4)) : anoIni);
+                        const nacionais = [];
+                        for (let a = anoIni; a <= anoFim; a++) nacionais.push(...feriadosNacionais(a));
+                        return nacionais.map(f => {
+                           const ativo = !feriadosDesativados.includes(f.data);
+                           return (
+                              <li key={f.data} className="flex items-center gap-3 px-3 py-2 text-sm">
+                                 <input type="checkbox" checked={ativo} className="rounded text-indigo-600"
+                                    onChange={() => setFeriadosDesativados(prev => ativo ? [...prev, f.data] : prev.filter(d => d !== f.data))} />
+                                 <span className={`font-semibold ${ativo ? 'text-slate-700' : 'text-slate-300 line-through'}`}>{f.data.substring(0, 5)}</span>
+                                 <span className={ativo ? 'text-slate-600' : 'text-slate-300 line-through'}>{f.descricao}</span>
+                              </li>
+                           );
+                        });
+                     })()}
+                  </ul>
+                  <div className="border-t border-slate-100 pt-4">
+                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Adicionar feriado (municipal, ponto facultativo…)</h4>
+                     <form className="flex flex-wrap gap-2" onSubmit={e => {
+                        e.preventDefault();
+                        const f = e.currentTarget;
+                        const data = (f.elements.namedItem('fer-data') as HTMLInputElement).value;
+                        const descricao = (f.elements.namedItem('fer-desc') as HTMLInputElement).value.trim();
+                        if (!data) return;
+                        setFeriadosCustom(prev => [...prev, { id: `fer-${Date.now()}`, data: isoToBR(data), descricao: descricao || 'Feriado' }]);
+                        f.reset();
+                     }}>
+                        <input name="fer-data" type="date" className="p-2 border rounded-lg text-sm" />
+                        <input name="fer-desc" type="text" placeholder="Descrição" className="flex-1 min-w-[120px] p-2 border rounded-lg text-sm" />
+                        <button type="submit" className="px-3 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg"><Plus size={16} /></button>
+                     </form>
+                     {feriadosCustom.length > 0 && (
+                        <ul className="mt-3 divide-y divide-slate-100 border border-slate-100 rounded-lg">
+                           {feriadosCustom.map(f => (
+                              <li key={f.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                                 <span><span className="font-semibold text-slate-700">{f.data}</span> · {f.descricao}</span>
+                                 <button onClick={() => setFeriadosCustom(prev => prev.filter(x => x.id !== f.id))} className="p-1.5 text-slate-300 hover:text-rose-600"><Trash2 size={16} /></button>
+                              </li>
+                           ))}
+                        </ul>
+                     )}
+                  </div>
+               </div>
+               <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+                  <button onClick={() => setShowFeriadosModal(false)} className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Fechar</button>
+               </div>
+            </div>
+         </div>
+      )}
+
+      {/* Modal Data Especial (todos os funcionários) */}
+      {showSpecialModal && (
+         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+               <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-slate-50">
+                  <h3 className="font-bold text-slate-800">Data Especial — Todos os funcionários</h3>
+                  <button onClick={() => setShowSpecialModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+               </div>
+               <div className="p-6 overflow-auto">
+                  <SpecialDatesEditor
+                     items={specialDates.filter(s => !s.funcionarioId)}
+                     onAdd={d => addSpecialDate(d)}
+                     onRemove={removeSpecialDate} />
+               </div>
+               <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+                  <button onClick={() => setShowSpecialModal(false)} className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Fechar</button>
+               </div>
+            </div>
+         </div>
+      )}
+
     </div>
   );
 };
+
+window.XLSX = XLSX;
 
 const container = document.getElementById('root');
 if (container) {

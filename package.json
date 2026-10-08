@@ -1,22 +1,55 @@
 {
-  "name": "app-folha-de-ponto",
+  "name": "leitor-folha-de-ponto",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "app": "vite build && electron .",
+    "dist": "vite build && electron-builder --win nsis"
   },
   "dependencies": {
     "lucide-react": "0.344.0",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.6.1",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "postcss": "^8.5.29",
+    "tailwindcss": "^3.4.19",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
+  },
+  "description": "Leitor de Folha de Ponto",
+  "author": "Theo Hideki",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.leitorfolhadeponto.app",
+    "productName": "Leitor de Folha de Ponto",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Leitor de Folha de Ponto"
+    }
   }
 }

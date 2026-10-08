@@ -1,6 +1,6 @@
-# Time Sheet - Intelligent Timekeeping Management
+# Leitor de Folha de Ponto
 
-Time Sheet is a web-based application designed to parse, analyze, and manage employee attendance records based on the Brazilian **AFD (Arquivo Fonte de Dados)** standard. It provides a modern interface to visualize time clocks, calculate overtime/lateness, and manage "Bank of Hours" (Banco de Horas) for a 44-hour weekly schedule.
+Aplicativo de desktop (Windows) que lê o arquivo AFD gerado pelo relógio de ponto e calcula horas trabalhadas, atrasos e banco de horas, com exportação para Excel. Funciona sem internet e salva as configurações no próprio computador.
 
 ## 🚀 Key Features
 
@@ -70,3 +70,12 @@ Generates a comprehensive `.xlsx` report containing:
 ## 📝 License
 
 This project is for internal use and attendance management optimization.
+
+## 💻 Gerar o aplicativo (.exe)
+
+```bash
+npm install
+npm run dist   # se der erro de EPERM, gere fora da pasta Desktop: npx electron-builder --win nsis -c.directories.output=C:/temp/lfp-release
+```
+
+O instalador é criado na pasta `release/`. Para abrir sem instalar: `npm run app`. Para desenvolvimento no navegador: `npm run dev`.

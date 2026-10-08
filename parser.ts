@@ -22,8 +22,8 @@ export class AFDParserV2 {
 
   constructor(configuracao?: ConfiguracaoSistema) {
     this.configuracao = configuracao || {
-      horarioPadraoEntrada: '08:00',
-      horarioPadraoSaida: '17:48', // Ajustado para fechar com a jornada de 8:48
+      horarioPadraoEntrada: '07:30',
+      horarioPadraoSaida: '17:30',
       horarioAlmocoInicio: '12:00',
       horarioAlmocoFim: '13:00',
       toleranciaAtraso: 10,
@@ -287,7 +287,8 @@ export class AFDParserV2 {
     // Se tiver atestado, zera as faltas, zera saldo (dia considerado trabalhado ou abonado)
     if (dia.atestado) {
         dia.pontosFaltantes = [];
-        dia.observacoes = [...dia.observacoes.filter(o => o !== "ATESTADO MÉDICO"), "ATESTADO MÉDICO"];
+        const rotulo = (dia.justificativa || 'Atestado Médico').toUpperCase();
+        dia.observacoes = [...dia.observacoes.filter(o => o !== rotulo), rotulo];
         dia.horasExtras = 0;
         dia.atrasos = 0;
         dia.saidasAntecipadas = 0;
@@ -298,8 +299,12 @@ export class AFDParserV2 {
     // Definição de Jornada Esperada para Banco de Horas (44h Semanais)
     // Seg-Sex: Esperado "config.jornadaDiaria" (Padrão 08:48)
     // Sáb-Dom: Esperado 0 (Tudo é extra)
-    const isFimDeSemana = dia.diaSemana === 'Sábado' || dia.diaSemana === 'Domingo';
+    // Feriado: nada é esperado, tudo que for trabalhado é saldo positivo
+    const isFimDeSemana = dia.diaSemana === 'Sábado' || dia.diaSemana === 'Domingo' || !!dia.feriado;
     const jornadaEsperadaMinutos = isFimDeSemana ? 0 : this.horaParaMinutos(config.jornadaDiaria || '08:48');
+    if (dia.feriado) dia.observacoes = [...dia.observacoes.filter(o => !o.startsWith('FERIADO')), `FERIADO: ${dia.feriado}`];
+    const bancoDeHoras = dia.justificativa === 'Banco de Horas';
+    if (bancoDeHoras) dia.observacoes = [...dia.observacoes.filter(o => o !== 'BANCO DE HORAS'), 'BANCO DE HORAS'];
 
     if (!dia.marcacoes || dia.marcacoes.length === 0) {
         dia.totalHorasTrabalhadas = 0;
@@ -312,8 +317,9 @@ export class AFDParserV2 {
             dia.atrasos = jornadaEsperadaMinutos;
             dia.saldoDia = -jornadaEsperadaMinutos;
             dia.horasExtras = 0;
+            if (bancoDeHoras) { dia.pontosFaltantes = []; dia.atrasos = 0; }
         } else {
-            // Fim de semana sem trabalho: Zero a zero
+            // Fim de semana/feriado sem trabalho: Zero a zero
             dia.atrasos = 0;
             dia.saldoDia = 0;
             dia.horasExtras = 0;
@@ -396,6 +402,12 @@ export class AFDParserV2 {
         dia.atrasos = 0;
     }
 
+    // Folga compensada pelo banco: o dia continua debitando a jornada, sem acusar falta/atraso
+    if (bancoDeHoras) {
+        dia.pontosFaltantes = [];
+        dia.atrasos = 0;
+    }
+
     // --- 4. Saídas Antecipadas (Indicador) ---
     dia.saidasAntecipadas = 0;
     if (!isFimDeSemana && dia.marcacoes.length > 0 && dia.marcacoes.length % 2 === 0) {
@@ -417,7 +429,7 @@ export class AFDParserV2 {
     const d = new Date(yyyy, (mm || 1) - 1, dd || 1);
     const isDomingo = d.getDay() === 0;
 
-    if (isDomingo) return; 
+    if (isDomingo || dia.feriado) { dia.pontosFaltantes = []; return; }
 
     const marcacoes = dia.marcacoes;
     const { horarioAlmocoInicio, horarioAlmocoFim } = config;
